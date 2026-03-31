@@ -12,83 +12,70 @@ struct TripleKey {
     int a, b, c;
 };
 
-// Compute values for 5 indices using 10 triple queries
+// Compute values for 5 indices using 10 triple queries robustly
 // Returns mapping from index -> value; indices provided in ids (size 5)
 static bool solve_base5(const array<int,5>& ids, unordered_map<int,long long>& out_val) {
-    // Map triple (by sorted indices) -> observed sum
+    auto key = [](int a,int b,int c){
+        if (a>b) swap(a,b); if (b>c) swap(b,c); if (a>b) swap(a,b);
+        return make_tuple(a,b,c);
+    };
     map<tuple<int,int,int>, long long> obs;
-    vector<pair<TripleKey,long long>> triples;
     for (int i = 0; i < 5; ++i) for (int j = i+1; j < 5; ++j) for (int k = j+1; k < 5; ++k) {
         int x = ids[i], y = ids[j], z = ids[k];
         long long s = query(x, y, z);
-        obs[make_tuple(x,y,z)] = s;
-        triples.push_back({{x,y,z}, s});
+        obs[key(x,y,z)] = s;
     }
 
-    // Frequency of sums
-    map<long long,int> freq;
-    for (auto &p : triples) freq[p.second]++;
-
-    // Collect by multiplicity
-    vector<long long> cnt1, cnt2, cnt3;
-    for (auto &kv : freq) {
-        if (kv.second == 1) cnt1.push_back(kv.first);
-        else if (kv.second == 2) cnt2.push_back(kv.first);
-        else if (kv.second == 3) cnt3.push_back(kv.first);
-    }
-    if (cnt1.size() != 3 || cnt2.size() != 2 || cnt3.size() != 1) {
-        return false; // degenerate case (unlikely)
-    }
-    sort(cnt1.begin(), cnt1.end()); // s13 < s24 < s35
-    sort(cnt2.begin(), cnt2.end()); // s14 < s25
-    // Identify sums
-    long long s13 = cnt1[0];
-    long long s24 = cnt1[1];
-    long long s35 = cnt1[2];
-    long long s14 = cnt2[0];
-    long long s25 = cnt2[1];
-    long long s15 = cnt3[0];
-
-    // Solve values
-    long long v3_times2 = s13 + s35 - s15;
-    if ((v3_times2 & 1LL) != 0) return false;
-    long long v3 = v3_times2 / 2;
-    long long v1 = s13 - v3;
-    long long v5 = s35 - v3;
-    long long v4 = s14 - v1;
-    long long v2 = s24 - v4;
-
-    array<long long,5> vals = {v1,v2,v3,v4,v5};
-
-    // Try all assignments of these values to the 5 indices to match observed triples
-    array<int,5> idx = ids;
+    // Try all permutations as order a<b<c<d<e mapped to ids[perm[0..4]]
+    array<int,5> id = ids;
     array<int,5> perm = {0,1,2,3,4};
-    // Precompute all triples among 5 by positions
-    vector<tuple<int,int,int>> posTrip;
-    for (int i = 0; i < 5; ++i) for (int j = i+1; j < 5; ++j) for (int k = j+1; k < 5; ++k) posTrip.emplace_back(i,j,k);
-
-    // Store observed value for each triple by concrete indices for quick check
-    // Already in obs map
-
     sort(perm.begin(), perm.end());
     do {
+        int ia = id[perm[0]], ib = id[perm[1]], ic = id[perm[2]], idd = id[perm[3]], ie = id[perm[4]];
+        auto getS = [&](int p,int q,int r)->long long { return obs[key(p,q,r)]; };
+        long long ac = getS(ia,ib,ic);
+        long long ad1 = getS(ia,ib,idd);
+        long long ad2 = getS(ia,ic,idd);
+        if (ad1 != ad2) continue;
+        long long ae1 = getS(ia,ib,ie);
+        long long ae2 = getS(ia,ic,ie);
+        long long ae3 = getS(ia,idd,ie);
+        if (!(ae1 == ae2 && ae2 == ae3)) continue;
+        long long bd = getS(ib,ic,idd);
+        long long be1 = getS(ib,ic,ie);
+        long long be2 = getS(ib,idd,ie);
+        if (be1 != be2) continue;
+        long long ce = getS(ic,idd,ie);
+
+        long long ae = ae1, ad = ad1, be = be1;
+        long long two_a = ae + ac - ce;
+        long long two_c = ac + ce - ae;
+        long long two_e = ae + ce - ac;
+        if ((two_a|two_c|two_e) & 1LL) continue; // parity must be even
+        long long a = two_a/2;
+        long long c = two_c/2;
+        long long e = two_e/2;
+        long long d = ad - a;
+        long long b = be - e;
+
+        // Check ordering a<b<c<d<e
+        if (!(a < b && b < c && c < d && d < e)) continue;
+
+        // Verify all 10 triples match
+        vector<int> pidx = {ia,ib,ic,idd,ie};
+        vector<long long> pval = {a,b,c,d,e};
         bool ok = true;
-        for (auto &t : posTrip) {
-            int pi, pj, pk; tie(pi,pj,pk) = t;
-            int xi = idx[pi], xj = idx[pj], xk = idx[pk];
-            long long si = vals[perm[pi]];
-            long long sj = vals[perm[pj]];
-            long long sk = vals[perm[pk]];
-            long long mn = min(si, min(sj, sk));
-            long long mx = max(si, max(sj, sk));
-            long long expected = mn + mx;
-            auto it = obs.find(make_tuple(xi,xj,xk));
-            if (it == obs.end() || it->second != expected) { ok = false; break; }
+        for (int i = 0; i < 5 && ok; ++i) for (int j = i+1; j < 5 && ok; ++j) for (int k = j+1; k < 5; ++k) {
+            long long mn = min(pval[i], min(pval[j], pval[k]));
+            long long mx = max(pval[i], max(pval[j], pval[k]));
+            long long expect = mn + mx;
+            if (obs[key(pidx[i],pidx[j],pidx[k])] != expect) { ok = false; break; }
         }
-        if (ok) {
-            for (int t = 0; t < 5; ++t) out_val[idx[t]] = vals[perm[t]];
-            return true;
-        }
+        if (!ok) continue;
+
+        // Assign to map
+        for (int t = 0; t < 5; ++t) out_val[pidx[t]] = pval[t];
+        return true;
     } while (next_permutation(perm.begin(), perm.end()));
 
     return false;
@@ -128,9 +115,10 @@ int guess(int n, int Taskid) {
     refs.reserve(baseVals.size());
     for (auto &kv : baseVals) refs.push_back({kv.second, kv.first});
     sort(refs.begin(), refs.end());
-    int idxU = refs[0].second;
-    int idxV = refs[2].second; // median among 5
-    int idxW = refs.back().second;
+    // Pick adjacent around median to reduce equal-case queries
+    int idxU = refs[1].second; // 2nd smallest
+    int idxV = refs[2].second; // 3rd smallest (between U and W)
+    int idxW = refs[3].second; // 4th smallest
     long long U = A[idxU], V = A[idxV], W = A[idxW];
     long long sumUV = U + V;
     long long sumUW = U + W;
@@ -148,25 +136,17 @@ int guess(int n, int Taskid) {
             // U < X < W, need s with U,V
             long long sUV = query(i, idxU, idxV);
             if (sUV > sumUV) {
-                // X > V => s = U + X
+                // X > V and < W => s = U + X
                 A[i] = sUV - U;
-            } else if (sUV < sumUV) {
-                // X < U (should not happen if sUW == sumUW), fallback compute with V,W
+            } else if (sUV == sumUV) {
+                // U < X < V → use V,W
                 long long sVW = query(i, idxV, idxW);
-                // If X < V then sVW = W + X; else if V < X < W then sVW = V + W (const)
-                if (sVW > V + W) {
-                    // X > W (contradiction), but handle
-                    A[i] = sVW - V;
-                } else if (sVW < V + W) {
-                    A[i] = sVW - W;
-                } else {
-                    // X in (V,W)
-                    A[i] = sUV - U; // equals U+X
-                }
+                // Here, if X < V: sVW = X + W (< V+W); if V < X < W: sVW = V + W
+                if (sVW < V + W) A[i] = sVW - W; else A[i] = sUV - U; // latter equals U+V -> cannot deduce X directly but not expected
             } else {
-                // U < X < V => need s with V,W to get X = sVW - W
+                // Should not happen as X is between U and W, so sUV cannot be < U+V
                 long long sVW = query(i, idxV, idxW);
-                A[i] = sVW - W;
+                if (sVW < V + W) A[i] = sVW - W; else A[i] = sUV - U;
             }
         }
     }
